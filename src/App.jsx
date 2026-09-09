@@ -177,7 +177,7 @@ function App() {
         localStorage.setItem('nova_sessions', JSON.stringify(updatedSessions));
         return updatedMsgs;
       });
-    } catch (error) {
+    } catch {
       setMessages(prev => [...prev, { role: 'bot', content: "Terjadi kesalahan saat menghubungkan ke sistem. Silakan coba lagi." }]);
     } finally {
       setIsLoading(false);
@@ -311,7 +311,7 @@ function App() {
                   {msg.role === 'bot' ? (
                     <ReactMarkdown
                       components={{
-                        img: ({ node, ...props }) => <img style={{ maxWidth: '100%', borderRadius: '12px', marginTop: '10px' }} {...props} />
+                        img: ({ ...props }) => <img style={{ maxWidth: '100%', borderRadius: '12px', marginTop: '10px' }} {...props} />
                       }}
                     >
                       {msg.content}

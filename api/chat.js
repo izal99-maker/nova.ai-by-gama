@@ -54,14 +54,18 @@ function getFriendlyGeminiError(error) {
         return "Permintaan ke Gemini terlalu banyak (429). Mohon tunggu sebentar lalu coba lagi.";
     }
 
-    if (message.includes("503") || lowerMessage.includes("high demand") || lowerMessage.includes("unavailable")) {
+    if (message.includes("503") || lowerMessage.includes("high demand")) {
         return "Layanan AI sedang sibuk (503). Silakan kirim pesan lagi dalam beberapa detik.";
+    }
+
+    if (message.includes("404") || lowerMessage.includes("no longer available")) {
+        return "Model AI yang digunakan sudah tidak tersedia. Tim sedang memperbarui konfigurasi model.";
     }
 
     return `Maaf, terjadi kendala saat menghubungkan ke layanan AI. (Error: ${message || "Unknown error"})`;
 }
 
-const DEFAULT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"];
+const DEFAULT_MODELS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
 
 function getModelCandidates() {
     const preferred = process.env.GEMINI_MODEL?.trim();
@@ -75,10 +79,19 @@ function isRetryableError(error) {
         message.includes("503")
         || message.includes("429")
         || message.includes("500")
-        || message.includes("unavailable")
         || message.includes("high demand")
         || message.includes("overloaded")
         || message.includes("resource exhausted")
+    );
+}
+
+function isModelUnavailableError(error) {
+    const message = String(error?.message || "").toLowerCase();
+    return (
+        message.includes("404")
+        || message.includes("no longer available")
+        || message.includes("not found")
+        || message.includes("is not supported")
     );
 }
 
@@ -159,7 +172,8 @@ async function runChatWithFallback(apiKey, message, history) {
         } catch (error) {
             lastError = error;
             console.warn(`Model ${modelName} failed:`, error.message);
-            if (!isRetryableError(error)) {
+            const canTryNextModel = isRetryableError(error) || isModelUnavailableError(error);
+            if (!canTryNextModel) {
                 throw error;
             }
         }

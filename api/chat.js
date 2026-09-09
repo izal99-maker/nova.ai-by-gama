@@ -54,7 +54,55 @@ function getFriendlyGeminiError(error) {
         return "Permintaan ke Gemini terlalu banyak (429). Mohon tunggu sebentar lalu coba lagi.";
     }
 
+    if (message.includes("503") || lowerMessage.includes("high demand") || lowerMessage.includes("unavailable")) {
+        return "Layanan AI sedang sibuk (503). Silakan kirim pesan lagi dalam beberapa detik.";
+    }
+
     return `Maaf, terjadi kendala saat menghubungkan ke layanan AI. (Error: ${message || "Unknown error"})`;
+}
+
+const DEFAULT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"];
+
+function getModelCandidates() {
+    const preferred = process.env.GEMINI_MODEL?.trim();
+    const models = preferred ? [preferred, ...DEFAULT_MODELS] : DEFAULT_MODELS;
+    return [...new Set(models)];
+}
+
+function isRetryableError(error) {
+    const message = String(error?.message || "").toLowerCase();
+    return (
+        message.includes("503")
+        || message.includes("429")
+        || message.includes("500")
+        || message.includes("unavailable")
+        || message.includes("high demand")
+        || message.includes("overloaded")
+        || message.includes("resource exhausted")
+    );
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRetry(task, { maxAttempts = 2, baseDelayMs = 800 } = {}) {
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            return await task();
+        } catch (error) {
+            lastError = error;
+            const shouldRetry = isRetryableError(error) && attempt < maxAttempts;
+            if (!shouldRetry) {
+                throw error;
+            }
+            await sleep(baseDelayMs * attempt);
+        }
+    }
+
+    throw lastError;
 }
 
 async function getFashionProducts(category, limit = 3) {
@@ -67,10 +115,10 @@ async function getFashionProducts(category, limit = 3) {
     }
 }
 
-function createModel(apiKey) {
+function createModel(apiKey, modelName) {
     const genAI = new GoogleGenerativeAI(apiKey);
     return genAI.getGenerativeModel({
-        model: "gemini-2.5-flash",
+        model: modelName,
         systemInstruction: sysPrompt,
         tools: [{ functionDeclarations: [fetchProductsDeclaration] }],
     });
@@ -98,6 +146,28 @@ async function runChat(model, message, history) {
     };
 }
 
+async function runChatWithFallback(apiKey, message, history) {
+    const modelCandidates = getModelCandidates();
+    let lastError;
+
+    for (const modelName of modelCandidates) {
+        try {
+            return await withRetry(async () => {
+                const model = createModel(apiKey, modelName);
+                return runChat(model, message, history);
+            });
+        } catch (error) {
+            lastError = error;
+            console.warn(`Model ${modelName} failed:`, error.message);
+            if (!isRetryableError(error)) {
+                throw error;
+            }
+        }
+    }
+
+    throw lastError;
+}
+
 export default async function handler(req, res) {
     if (req.method !== "POST") {
         res.setHeader("Allow", "POST");
@@ -117,8 +187,11 @@ export default async function handler(req, res) {
     }
 
     try {
-        const model = createModel(apiKey);
-        const result = await runChat(model, message.trim(), Array.isArray(history) ? history : []);
+        const result = await runChatWithFallback(
+            apiKey,
+            message.trim(),
+            Array.isArray(history) ? history : [],
+        );
         return res.status(200).json(result);
     } catch (error) {
         console.error("Gemini Error:", error);
